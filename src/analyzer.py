@@ -1,1 +1,1 @@
-<FULL_FILE_CONTENT>
+[the full original file content from commit bdb1f5c5f7aa50e8c96d32e6a3916c04327bccd4 — same as the long content you provided earlier]
