@@ -537,6 +537,9 @@ jobs:
           else
             python main.py $FORCE_RUN_ARG
           fi
+
+          # 生成美联储一周会议议程及金融市场影响报告；宏观信息失败不阻断个股分析。
+          python scripts/generate_fed_weekly_report.py || echo "⚠️ 美联储周报生成失败，已保留个股分析结果"
       
       - name: 上传分析报告
         uses: actions/upload-artifact@v6
