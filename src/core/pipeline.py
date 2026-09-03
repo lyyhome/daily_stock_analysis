@@ -3082,7 +3082,25 @@ class StockAnalysisPipeline:
             analyze_kwargs = {"query_id": effective_query_id}
             if current_time is not None:
                 analyze_kwargs["current_time"] = current_time
-            result = self.analyze_stock(code, report_type, **analyze_kwargs)
+            pipeline_config = getattr(self, "config", None)
+            retry_count = max(
+                0,
+                int(getattr(pipeline_config, "analysis_retry_count", 1))
+                if pipeline_config is not None
+                else 0,
+            )
+            result = None
+            for attempt in range(retry_count + 1):
+                result = self.analyze_stock(code, report_type, **analyze_kwargs)
+                if result is not None and result.success:
+                    break
+                if attempt < retry_count:
+                    logger.warning(
+                        "[%s] 分析失败，进行第 %d 次重试: %s",
+                        code,
+                        attempt + 1,
+                        getattr(result, "error_message", None) or "无结果",
+                    )
             
             if result and result.success:
                 logger.info(
