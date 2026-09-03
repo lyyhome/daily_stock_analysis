@@ -4131,7 +4131,12 @@ class SearchService:
                         error_type=type(exc).__name__,
                         error_message=exc,
                     )
-                    raise
+                    logger.warning(
+                        "%s 搜索异常: %s，继续尝试下一个搜索引擎",
+                        provider.name,
+                        exc,
+                    )
+                    continue
                 filtered_response = self._filter_news_response(
                     response,
                     search_days=search_days,
@@ -4534,18 +4539,33 @@ class SearchService:
                 request_days,
             )
 
-            if isinstance(provider, TavilySearchProvider) and dim.get('tavily_topic'):
-                response = provider.search(
-                    dim['query'],
-                    max_results=provider_max_results,
-                    days=request_days,
-                    topic=dim['tavily_topic'],
+            try:
+                if isinstance(provider, TavilySearchProvider) and dim.get('tavily_topic'):
+                    response = provider.search(
+                        dim['query'],
+                        max_results=provider_max_results,
+                        days=request_days,
+                        topic=dim['tavily_topic'],
+                    )
+                else:
+                    response = provider.search(
+                        dim['query'],
+                        max_results=provider_max_results,
+                        days=request_days,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[情报搜索] %s 使用 %s 异常，跳过该维度: %s",
+                    dim['desc'],
+                    provider.name,
+                    exc,
                 )
-            else:
-                response = provider.search(
-                    dim['query'],
-                    max_results=provider_max_results,
-                    days=request_days,
+                response = SearchResponse(
+                    query=dim['query'],
+                    results=[],
+                    provider=provider.name,
+                    success=False,
+                    error_message=str(exc),
                 )
             if dim['strict_freshness']:
                 filtered_response = self._filter_news_response(
