@@ -3085,9 +3085,9 @@ class StockAnalysisPipeline:
             pipeline_config = getattr(self, "config", None)
             retry_count = max(
                 0,
-                int(getattr(pipeline_config, "analysis_retry_count", 1))
+                int(getattr(pipeline_config, "analysis_retry_count", 2))
                 if pipeline_config is not None
-                else 0,
+                else 2,
             )
             result = None
             for attempt in range(retry_count + 1):
@@ -3248,6 +3248,7 @@ class StockAnalysisPipeline:
                                 fallback_code=code,
                             )
                     elif result and not result.success:
+                        results.append(result)
                         logger.warning(
                             f"[{code}] 分析结果标记为失败，不计入汇总: "
                             f"{result.error_message or '未知原因'}"
@@ -3264,6 +3265,18 @@ class StockAnalysisPipeline:
 
                 except Exception as e:
                     logger.error(f"[{code}] 任务执行失败: {e}")
+                    results.append(
+                        AnalysisResult(
+                            code=code,
+                            name=code,
+                            sentiment_score=50,
+                            trend_prediction=localize_trend_prediction("震荡", "zh"),
+                            operation_advice=localize_operation_advice("持有", "zh"),
+                            analysis_summary="分析失败，未能生成有效结果",
+                            success=False,
+                            error_message=str(e),
+                        )
+                    )
         
         # 统计
         elapsed_time = time.time() - start_time
@@ -3283,7 +3296,7 @@ class StockAnalysisPipeline:
             )
             fail_count = len(stock_codes) - success_count
         else:
-            success_count = len(results)
+            success_count = sum(1 for result in results if result.success)
             fail_count = len(stock_codes) - success_count
         
         logger.info("===== 分析完成 =====")
