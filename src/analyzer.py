@@ -1897,6 +1897,7 @@ class GeminiAnalyzer:
             _json_text, data = self._extract_analysis_json_object(response_text)
             if not isinstance(data, dict):
                 raise ValueError("analysis response must be a JSON object")
+            name = data.get("stock_name") or name
             result = AnalysisResult(
                 code=code,
                 name=name,
@@ -1907,7 +1908,11 @@ class GeminiAnalyzer:
                 dashboard=data.get("dashboard"),
                 success=True,
             )
-            return populate_decision_action_fields(result, align_with_score=False)
+            return populate_decision_action_fields(
+                result,
+                explicit_action=data.get("action"),
+                align_with_score=False,
+            )
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             return AnalysisResult(
                 code=code,
@@ -1917,7 +1922,7 @@ class GeminiAnalyzer:
                 operation_advice="持有",
                 analysis_summary="分析过程出错: 响应不是有效 JSON",
                 success=False,
-                error_message=str(exc),
+                error_message=f"JSON 解析失败: {exc}",
             )
 
     def _validate_json_response(self, text: str) -> None:
@@ -1928,6 +1933,7 @@ class GeminiAnalyzer:
         try:
             _json_text, data = self._extract_analysis_json_object(text)
         except Exception as exc:
+            reason = "ambiguous_json" if str(exc) == "ambiguous_json" else "invalid_json"
             raise GenerationError(
                 error_code=GenerationErrorCode.INVALID_JSON,
                 stage="validation",
@@ -1935,7 +1941,7 @@ class GeminiAnalyzer:
                 fallbackable=True,
                 backend="litellm",
                 provider="litellm",
-                details={"reason": "invalid_json", "message": str(exc)[:200]},
+                details={"reason": reason, "message": str(exc)[:200]},
             ) from exc
         if not isinstance(data, dict):
             raise GenerationError(
@@ -1947,6 +1953,63 @@ class GeminiAnalyzer:
                 provider="litellm",
                 details={"reason": "invalid_json", "message": "analysis response must be a JSON object"},
             )
+        required = {"sentiment_score", "trend_prediction", "operation_advice", "analysis_summary", "dashboard"}
+        if not required.intersection(data):
+            raise GenerationError(
+                error_code=GenerationErrorCode.SCHEMA_VALIDATION_FAILED,
+                stage="validation",
+                retryable=True,
+                fallbackable=True,
+                backend="litellm",
+                provider="litellm",
+                details={"reason": "minimal_contract_failed", "message": "analysis JSON has no parser fields"},
+            )
+        if "sentiment_score" in data:
+            try:
+                int(data["sentiment_score"])
+            except (TypeError, ValueError) as exc:
+                raise GenerationError(
+                    error_code=GenerationErrorCode.SCHEMA_VALIDATION_FAILED,
+                    stage="validation",
+                    retryable=True,
+                    fallbackable=True,
+                    backend="litellm",
+                    provider="litellm",
+                    details={"reason": "parser_contract_failed", "message": "sentiment_score must be integer-compatible"},
+                ) from exc
+
+    def _fix_json_string(self, json_str: str) -> str:
+        import re
+
+        fixed = re.sub(r",\s*([}\]])", r"\1", str(json_str or ""))
+        return fixed
+
+    def _parse_text_response(self, response_text: str, code: str, name: str) -> AnalysisResult:
+        language = normalize_report_language(getattr(self._get_runtime_config(), "report_language", "zh"))
+        text = str(response_text or "").strip()
+        lowered = text.lower()
+        if language == "en":
+            trend = "Bullish" if "bullish" in lowered else "Neutral"
+            advice = "Buy" if "buy" in lowered else "Hold"
+            confidence = "Low"
+        elif language == "ko":
+            trend, advice, confidence = "중립", "보유", "낮음"
+        else:
+            trend = "看多" if any(word in text for word in ("看多", "上涨", "买入")) else "震荡"
+            advice = "买入" if "买入" in text else "持有"
+            confidence = "低"
+        return AnalysisResult(
+            code=code,
+            name=name,
+            sentiment_score=50,
+            trend_prediction=trend,
+            operation_advice=advice,
+            confidence_level=confidence,
+            report_language=language,
+            analysis_summary=text,
+            success=False,
+            error_message="LLM response is not valid JSON; analysis result will not be persisted",
+        )
         
     LEGACY_DEFAULT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{market_placeholder}投资分析师，负责生成专业的【决策仪表盘】分析报告。
     【⚠️ 极度重要的格式约束】
@@ -4479,17 +4542,24 @@ class GeminiAnalyzer:
             data = json.loads(json_str)
         except json.JSONDecodeError:
             stripped = (json_str or "").strip()
+            repaired = self._fix_json_string(stripped)
+            try:
+                data = json.loads(repaired)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict):
+                return data
             try:
                 _obj, end = json.JSONDecoder().raw_decode(stripped)
             except json.JSONDecodeError:
                 logger.error("JSON 解析失败，原文: %s", stripped)
                 raise ValueError("AI返回了无法解析的乱码")
             if stripped[end:].strip():
+                if "{" in stripped[end:]:
+                    raise ValueError("ambiguous_json")
                 raise ValueError("trailing_content")
-            if not (stripped.startswith("{") and stripped.endswith("}")):
-                raise ValueError("json_root_not_object")
-            repaired = self._fix_json_string(stripped)
-            data = json.loads(repaired)
+            if data is None:
+                raise ValueError("AI返回了无法解析的乱码")
         if not isinstance(data, dict):
             raise TypeError("json_root_not_object")
         return data
@@ -4505,8 +4575,10 @@ class GeminiAnalyzer:
                 _obj, end = decoder.raw_decode(text[index:])
             except json.JSONDecodeError:
                 continue
-            # 解析失败说明不是有效的 JSON，直接返回 False
-        return False
+            count += 1
+            if count > 1:
+                return True
+        return count == 1
         
 def _validate_analysis_minimal_contract(self, data: Dict[str, Any]) -> None:
     try:
@@ -4694,48 +4766,18 @@ def _validate_analysis_minimal_contract(self, data: Dict[str, Any]) -> None:
     
     def _fix_json_string(self, json_str: str) -> str:
         """修复常见的 JSON 格式问题"""
-        import json
+        import re
 
-        if code is None or name is None:
-            if not response_text:
-                return {}
-            try:
-                return response_text if isinstance(response_text, dict) else json.loads(str(response_text).strip())
-            except (TypeError, json.JSONDecodeError):
-                return response_text
-
-        try:
-            _json_text, data = self._extract_analysis_json_object(response_text)
-            if not isinstance(data, dict):
-                raise ValueError("analysis response must be a JSON object")
-            result = AnalysisResult(
-                code=code,
-                name=name,
-                sentiment_score=int(data.get("sentiment_score", 50)),
-                trend_prediction=data.get("trend_prediction", "震荡"),
-                operation_advice=data.get("operation_advice", "持有"),
-                analysis_summary=data.get("analysis_summary", "分析完成"),
-                dashboard=data.get("dashboard"),
-                success=True,
-            )
-            return populate_decision_action_fields(result, align_with_score=False)
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            return AnalysisResult(
-                code=code,
-                name=name,
-                sentiment_score=50,
-                trend_prediction="震荡",
-                operation_advice="持有",
-                analysis_summary="分析过程出错: 响应不是有效 JSON",
-                success=False,
-                error_message=str(exc),
-            )
+        fixed = re.sub(r",\s*([}\]])", r"\1", str(json_str or ""))
+        fixed = fixed.replace("True", "true").replace("False", "false")
+        return repair_json(fixed)
 
     def _validate_json_response(self, text: str) -> None:
         """Reject responses that cannot be parsed as an analysis JSON object."""
         try:
             _json_text, data = self._extract_analysis_json_object(text)
         except Exception as exc:
+            reason = "ambiguous_json" if str(exc) == "ambiguous_json" else "invalid_json"
             raise GenerationError(
                 error_code=GenerationErrorCode.INVALID_JSON,
                 stage="validation",
@@ -4743,7 +4785,7 @@ def _validate_analysis_minimal_contract(self, data: Dict[str, Any]) -> None:
                 fallbackable=True,
                 backend="litellm",
                 provider="litellm",
-                details={"reason": "invalid_json", "message": str(exc)[:200]},
+                details={"reason": reason, "message": str(exc)[:200]},
             ) from exc
         if not isinstance(data, dict):
             raise GenerationError(
