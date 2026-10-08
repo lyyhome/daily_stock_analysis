@@ -2523,9 +2523,19 @@ class NotificationService(
         email_stock_codes: Optional[List[str]],
         email_send_to_all: bool,
         route_type: Optional[str] = None,
+        title: Optional[str] = None,
     ) -> bool:
         use_image = self._should_use_image_for_channel(channel, image_bytes)
         sanitized_content = strip_hidden_markdown_metadata(content).strip()
+        title_supported = {
+            NotificationChannel.DINGTALK,
+            NotificationChannel.GOTIFY,
+            NotificationChannel.NTFY,
+            NotificationChannel.PUSHOVER,
+            NotificationChannel.PUSHPLUS,
+            NotificationChannel.SERVERCHAN3,
+        }
+        title_kw = {"title": title} if title is not None and channel in title_supported else {}
         if channel == NotificationChannel.WECHAT:
             if use_image:
                 return self._send_wechat_image(image_bytes)
@@ -2539,7 +2549,7 @@ class NotificationService(
                 return self.send_feishu_file(filepath)
             return self.send_to_feishu(sanitized_content)
         if channel == NotificationChannel.DINGTALK:
-            return self.send_to_dingtalk(sanitized_content)
+            return self.send_to_dingtalk(sanitized_content, **title_kw)
         if channel == NotificationChannel.TELEGRAM:
             if use_image:
                 return self._send_telegram_photo(image_bytes)
@@ -2557,15 +2567,15 @@ class NotificationService(
                 receivers=receivers,
             )
         if channel == NotificationChannel.PUSHOVER:
-            return self.send_to_pushover(content)
+            return self.send_to_pushover(content, **title_kw)
         if channel == NotificationChannel.NTFY:
-            return self.send_to_ntfy(sanitized_content)
+            return self.send_to_ntfy(sanitized_content, **title_kw)
         if channel == NotificationChannel.GOTIFY:
-            return self.send_to_gotify(sanitized_content)
+            return self.send_to_gotify(sanitized_content, **title_kw)
         if channel == NotificationChannel.PUSHPLUS:
-            return self.send_to_pushplus(sanitized_content)
+            return self.send_to_pushplus(sanitized_content, **title_kw)
         if channel == NotificationChannel.SERVERCHAN3:
-            return self.send_to_serverchan3(sanitized_content)
+            return self.send_to_serverchan3(sanitized_content, **title_kw)
         if channel == NotificationChannel.CUSTOM:
             if use_image:
                 return self._send_custom_webhook_image(image_bytes, fallback_content=content)
@@ -2591,6 +2601,7 @@ class NotificationService(
         dedup_key: Optional[str] = None,
         cooldown_key: Optional[str] = None,
         structured_payload: Optional[Dict[str, Any]] = None,
+        title: Optional[str] = None,
     ) -> NotificationDispatchResult:
         """
         Send a notification and return per-channel diagnostics.
@@ -2747,6 +2758,7 @@ class NotificationService(
                     email_stock_codes=email_stock_codes,
                     email_send_to_all=email_send_to_all,
                     route_type=route_type,
+                    title=title,
                 )
                 latency_ms = int((time.monotonic() - started_at) * 1000)
 
@@ -2809,6 +2821,7 @@ class NotificationService(
         dedup_key: Optional[str] = None,
         cooldown_key: Optional[str] = None,
         structured_payload: Optional[Dict[str, Any]] = None,
+        title: Optional[str] = None,
     ) -> bool:
         """
         统一发送接口 - 向所有已配置的渠道发送。
@@ -2825,6 +2838,7 @@ class NotificationService(
             dedup_key=dedup_key,
             cooldown_key=cooldown_key,
             structured_payload=structured_payload,
+            title=title,
         )
         return bool(result.success)
 

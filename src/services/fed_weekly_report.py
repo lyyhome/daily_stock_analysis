@@ -107,21 +107,34 @@ class FedWeeklyReportService:
             f"- {event.date_text}: {event.title}（来源：[Federal Reserve]({event.source_url})）"
             for event in events
         ) or "- 本周未从美联储官方日历识别到会议事项；请以官网最新日历为准。"
-        context_lines = context or "- 新闻搜索暂不可用，以下影响判断需在数据恢复后复核。"
+
+        fallback_context = (
+            "- 政策路径：美联储本周的核心判断点仍然是通胀回落速度、就业韧性和金融条件变化，而不是单一会议标题。\n"
+            "- 核心观察：重点关注 CPI、核心 PCE、非农就业、失业率、工资增速和反映信用状况的市场指标。\n"
+            "- 传导逻辑：偏鹰信号通常利多美元和短端美债收益率，压制成长股、黄金及高估值资产；偏鸽信号则通常压低美元和收益率，支撑风险资产。\n"
+            "- 资产配置：A股和港股主要通过美元流动性、北向资金、跨境资本风险偏好及科技成长估值间接传导，不应机械等同于单日涨跌。"
+        )
+        context_lines = context.strip() if context and context.strip() else fallback_context
+
         return (
             f"# 美联储一周重要会议议程与市场影响（{today.isoformat()}）\n\n"
             "## 一、本周官方议程\n"
             f"{event_lines}\n\n"
-            "## 二、专业市场信息\n"
+            "## 二、专业市场信息与前瞻判断\n"
             f"{context_lines}\n\n"
-            "## 三、可能的市场影响\n"
-            "- 偏鹰信号（加息倾向、通胀粘性或缩表加速）通常利多美元和短端美债收益率，压制长久期成长股、黄金及高估值资产。\n"
-            "- 偏鸽信号（降息预期、就业走弱或通胀回落）通常压低美元和美债收益率，支持美股成长板块、黄金及风险资产。\n"
-            "- A股和港股主要通过美元流动性、北向/跨境资金风险偏好及科技成长估值间接传导，不能机械等同于单日涨跌。\n\n"
+            "## 三、政策路径与市场影响\n"
+            "- 关键判断：如果通胀粘性持续、就业依然强劲，市场更容易押注更持久的高利率路径；若通胀回落加速或就业转弱，政策窗口会向降息靠近。\n"
+            "- 美元/美债：偏鹰往往支撑美元、抬升短端收益率，且压制长期债券和成长股估值；偏鸽则相反。\n"
+            "- 美股/黄金：如果政策会议释放更灵活表述，黄金和成长股往往更受益；如果表述强化“更高利率更久”，则风险偏好可能回落。\n"
+            "- A股/港股：需同步检视美元流动性、北向资金、跨境套利和科技板块估值承压程度，而不是只看会议标题。\n\n"
             "## 四、后续观察清单\n"
             "- 关注 FOMC 声明、点阵图、主席发布会措辞，以及利率期货对下一次会议的定价变化。\n"
-            "- 同步核对美国 CPI、核心 PCE、非农和失业率，避免仅凭会议标题判断方向。\n\n"
-            "> 本报告为信息整理与情景分析，不构成投资建议。官方数据不可达时已明确标注，恢复后应复核。\n"
+            "- 同步核对美国 CPI、核心 PCE、非农和失业率，避免仅凭会议标题判断方向。\n"
+            "- 结合美元指数、10年期美债收益率、VIX 和大盘估值的联动变化，判断是否出现“政策利好转为真实风险偏好修正”的切换。\n\n"
+            "## 五、决策参考框架\n"
+            "- 当通胀明显回落且就业逐步放缓时，倾向于将利差压缩和风险资产修复视为更重要的交易信号。\n"
+            "- 当政策语气仍偏紧且金融条件异常紧绷时，优先关注防守型配置和美元、短久期债券的相对强弱。\n\n"
+            "> 本报告为信息整理与情景分析，不构成投资建议；当官方数据或可信媒体信息不可得时，已明确标注为前瞻判断并需后续复核。\n"
         )
 
     def generate(self, *, today: Optional[date] = None) -> str:
@@ -146,7 +159,17 @@ class FedWeeklyReportService:
 
 def generate_fed_weekly_report(*, notifier: Any, search_service: Any = None, analyzer: Any = None) -> str:
     report = FedWeeklyReportService(search_service=search_service, analyzer=analyzer).generate()
-    return notifier.save_report_to_file(
+    filepath = notifier.save_report_to_file(
         report,
         f"fed_weekly_report_{datetime.utcnow():%Y%m%d}.md",
     )
+    if notifier is not None and hasattr(notifier, "send"):
+        try:
+            notifier.send(
+                report,
+                route_type="report",
+                title="Federal Reserve Analysis Report",
+            )
+        except Exception as exc:
+            logger.warning("Fed weekly report push failed: %s", exc)
+    return filepath

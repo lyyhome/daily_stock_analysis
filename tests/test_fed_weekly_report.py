@@ -17,6 +17,8 @@ def test_generate_is_available_without_network_or_llm():
     with patch.object(service, "fetch_official_calendar", return_value=[]):
         report = service.generate(today=date(2026, 9, 3))
     assert "美联储一周重要会议议程" in report
+    assert "政策路径" in report
+    assert "CPI" in report or "PCE" in report
     assert "美元" in report
     assert "不构成投资建议" in report
 
@@ -38,3 +40,23 @@ def test_fetch_official_calendar_fails_open():
     service = FedWeeklyReportService()
     with patch("src.services.fed_weekly_report.requests.get", side_effect=TimeoutError("offline")):
         assert service.fetch_official_calendar(today=date(2026, 9, 3)) == []
+
+
+def test_generate_fed_weekly_report_sends_via_notifier_when_available():
+    notifier = Mock()
+    notifier.save_report_to_file.return_value = "D:/tmp/fed_report.md"
+    notifier.send.return_value = True
+
+    path = __import__("src.services.fed_weekly_report", fromlist=["generate_fed_weekly_report"]).generate_fed_weekly_report(
+        notifier=notifier,
+        search_service=None,
+        analyzer=None,
+    )
+
+    assert path == "D:/tmp/fed_report.md"
+    notifier.save_report_to_file.assert_called_once()
+    notifier.send.assert_called_once_with(
+        notifier.save_report_to_file.call_args.args[0],
+        route_type="report",
+        title="Federal Reserve Analysis Report",
+    )

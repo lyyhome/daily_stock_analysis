@@ -3375,6 +3375,7 @@ class StockAnalysisPipeline:
                     "severity": "info",
                     "dedup_key": f"report:single:{stock_code}:{report_type.value}",
                     "cooldown_key": f"report:single:{stock_code}:{report_type.value}",
+                    "title": "Stock holding analysis report",
                 }
                 if _supports_explicit_keyword(self.notifier.send, "structured_payload"):
                     send_kwargs["structured_payload"] = _share_image_payload(result)
@@ -3814,7 +3815,7 @@ class StockAnalysisPipeline:
                     elif channel == NotificationChannel.PUSHPLUS:
                         channel_success, channel_error = _send_channel_safely(
                             channel.value,
-                            lambda: self.notifier.send_to_pushplus(report),
+                            lambda: self.notifier.send_to_pushplus(report, title="Stock holding analysis report"),
                         )
                         non_wechat_success = channel_success or non_wechat_success
                         _record_channel_result(
